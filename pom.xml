@@ -3,7 +3,7 @@
 	<modelVersion>4.0.0</modelVersion>
 	<groupId>com.esotericsoftware</groupId>
 	<artifactId>wildcard</artifactId>
-	<version>1.04</version>
+	<version>1.05</version>
 	<name>Wildcard</name>
 	<build>
 		<directory>${project.basedir}/target</directory>

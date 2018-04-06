@@ -5,7 +5,9 @@ import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
-import java.nio.channels.FileChannel;
+import java.nio.file.DirectoryStream;
+import java.nio.file.Files;
+import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -54,8 +56,8 @@ public class Paths implements Iterable<String> {
 					patterns[i - 1] = split[i];
 			}
 		}
-		File dirFile = new File(dir);
-		if (!dirFile.exists()) return this;
+		java.nio.file.Path dirFile = java.nio.file.Paths.get(dir);
+		if (!dirFile.toFile().exists()) return this;
 
 		List<String> includes = new ArrayList();
 		List<String> excludes = new ArrayList();
@@ -72,7 +74,7 @@ public class Paths implements Iterable<String> {
 		if (defaultGlobExcludes != null) excludes.addAll(defaultGlobExcludes);
 
 		GlobScanner scanner = new GlobScanner(dirFile, includes, excludes, ignoreCase);
-		String rootDir = scanner.rootDir().getPath().replace('\\', '/');
+		String rootDir = scanner.rootDir().toString().replace('\\', '/');
 		if (!rootDir.endsWith("/")) rootDir += '/';
 		for (String filePath : scanner.matches())
 			paths.add(new Path(rootDir, filePath));
@@ -145,8 +147,8 @@ public class Paths implements Iterable<String> {
 					patterns[i - 1] = split[i];
 			}
 		}
-		File dirFile = new File(dir);
-		if (!dirFile.exists()) return this;
+		java.nio.file.Path dirFile = java.nio.file.Paths.get(dir);
+		if (!dirFile.toFile().exists()) return this;
 
 		List<String> includes = new ArrayList();
 		List<String> excludes = new ArrayList();
@@ -161,7 +163,7 @@ public class Paths implements Iterable<String> {
 		if (includes.isEmpty()) includes.add(".*");
 
 		RegexScanner scanner = new RegexScanner(dirFile, includes, excludes);
-		String rootDir = scanner.rootDir().getPath().replace('\\', '/');
+		String rootDir = scanner.rootDir().toString().replace('\\', '/');
 		if (!rootDir.endsWith("/")) rootDir += '/';
 		for (String filePath : scanner.matches())
 			paths.add(new Path(rootDir, filePath));
@@ -173,12 +175,12 @@ public class Paths implements Iterable<String> {
 	public Paths copyTo (String destDir) throws IOException {
 		Paths newPaths = new Paths();
 		for (Path path : paths) {
-			File destFile = new File(destDir, path.name);
-			File srcFile = path.file();
-			if (srcFile.isDirectory()) {
-				destFile.mkdirs();
+			java.nio.file.Path destFile = java.nio.file.Paths.get(destDir, path.name);
+			java.nio.file.Path srcFile = path.path();
+			if (srcFile.toFile().isDirectory()) {
+				Files.createDirectories(destFile);
 			} else {
-				destFile.getParentFile().mkdirs();
+				Files.createDirectories(destFile.getParent());
 				copyFile(srcFile, destFile);
 			}
 			newPaths.paths.add(new Path(destDir, path.name));
@@ -190,13 +192,17 @@ public class Paths implements Iterable<String> {
 	 * @return False if any file could not be deleted. */
 	public boolean delete () {
 		boolean success = true;
-		List<Path> pathsCopy = new ArrayList<Path>(paths);
+		List<Path> pathsCopy = new ArrayList<>(paths);
 		Collections.sort(pathsCopy, LONGEST_TO_SHORTEST);
-		for (File file : getFiles(pathsCopy)) {
-			if (file.isDirectory()) {
-				if (!deleteDirectory(file)) success = false;
+		for (java.nio.file.Path path : getPaths(pathsCopy)) {
+			if (path.toFile().isDirectory()) {
+				if (!deleteDirectory(path)) success = false;
 			} else {
-				if (!file.delete()) success = false;
+				try {
+					if (!Files.deleteIfExists(path)) success = false;
+				} catch (IOException e) {
+					success = false;
+				}
 			}
 		}
 		return success;
@@ -212,9 +218,9 @@ public class Paths implements Iterable<String> {
 		out.setLevel(Deflater.BEST_COMPRESSION);
 		try {
 			for (Path path : zipPaths.paths) {
-				File file = path.file();
+				java.nio.file.Path p = path.path();
 				out.putNextEntry(new ZipEntry(path.name.replace('\\', '/')));
-				FileInputStream in = new FileInputStream(file);
+				FileInputStream in = new FileInputStream(p.toFile());
 				int len;
 				while ((len = in.read(buf)) > 0)
 					out.write(buf, 0, len);
@@ -237,7 +243,7 @@ public class Paths implements Iterable<String> {
 	/** Returns the absolute paths delimited by the specified character. */
 	public String toString (String delimiter) {
 		StringBuffer buffer = new StringBuffer(256);
-		for (String path : getPaths()) {
+		for (String path : getFullPaths()) {
 			if (buffer.length() > 0) buffer.append(delimiter);
 			buffer.append(path);
 		}
@@ -253,8 +259,8 @@ public class Paths implements Iterable<String> {
 	public Paths flatten () {
 		Paths newPaths = new Paths();
 		for (Path path : paths) {
-			File file = path.file();
-			if (file.isFile()) newPaths.paths.add(new Path(file.getParent(), file.getName()));
+			java.nio.file.Path p = path.path();
+			if (p.toFile().isFile()) newPaths.paths.add(new Path(p.getParent().toString(), p.getFileName().toString()));
 		}
 		return newPaths;
 	}
@@ -263,7 +269,7 @@ public class Paths implements Iterable<String> {
 	public Paths filesOnly () {
 		Paths newPaths = new Paths();
 		for (Path path : paths) {
-			if (path.file().isFile()) newPaths.paths.add(path);
+			if (path.path().toFile().isFile()) newPaths.paths.add(path);
 		}
 		return newPaths;
 	}
@@ -272,7 +278,7 @@ public class Paths implements Iterable<String> {
 	public Paths dirsOnly () {
 		Paths newPaths = new Paths();
 		for (Path path : paths) {
-			if (path.file().isDirectory()) newPaths.paths.add(path);
+			if (path.path().toFile().isDirectory()) newPaths.paths.add(path);
 		}
 		return newPaths;
 	}
@@ -282,10 +288,22 @@ public class Paths implements Iterable<String> {
 		return getFiles(new ArrayList(paths));
 	}
 
-	private ArrayList<File> getFiles (List<Path> paths) {
-		ArrayList<File> files = new ArrayList(paths.size());
+	private List<File> getFiles (List<Path> paths) {
+		List<File> files = new ArrayList(paths.size());
 		for (Path path : paths)
-			files.add(path.file());
+			files.add(path.path().toFile());
+		return files;
+	}
+
+	/** Returns the paths as File objects. */
+	public List<java.nio.file.Path> getPaths () {
+		return getPaths(new ArrayList(paths));
+	}
+
+	private List<java.nio.file.Path> getPaths (List<Path> paths) {
+		List<java.nio.file.Path> files = new ArrayList(paths.size());
+		for (Path path : paths)
+			files.add(path.path());
 		return files;
 	}
 
@@ -298,26 +316,26 @@ public class Paths implements Iterable<String> {
 	}
 
 	/** Returns the full paths. */
-	public List<String> getPaths () {
+	public List<String> getFullPaths () {
 		ArrayList<String> stringPaths = new ArrayList(paths.size());
-		for (File file : getFiles())
-			stringPaths.add(file.getPath());
+		for (java.nio.file.Path path : getPaths())
+			stringPaths.add(path.toString());
 		return stringPaths;
 	}
 
 	/** Returns the paths' filenames. */
 	public List<String> getNames () {
 		ArrayList<String> stringPaths = new ArrayList(paths.size());
-		for (File file : getFiles())
-			stringPaths.add(file.getName());
+		for (java.nio.file.Path path : getPaths())
+			stringPaths.add(path.getFileName().toString());
 		return stringPaths;
 	}
 
 	/** Adds a single path to this Paths object. */
 	public Paths addFile (String fullPath) {
-		File file = new File(fullPath);
-		String parent = file.getParent();
-		paths.add(new Path(parent == null ? "" : parent, file.getName()));
+		java.nio.file.Path path = java.nio.file.Paths.get(fullPath);
+		java.nio.file.Path parent = path.getParent();
+		paths.add(new Path(parent == null ? "" : parent.toString(), path.getFileName().toString()));
 		return this;
 	}
 
@@ -361,7 +379,26 @@ public class Paths implements Iterable<String> {
 			}
 
 			public File next () {
-				return iter.next().file();
+				return iter.next().path().toFile();
+			}
+
+			public boolean hasNext () {
+				return iter.hasNext();
+			}
+		};
+	}
+
+	/** Iterates over the paths as File objects. The iterator supports the remove method. */
+	public Iterator<java.nio.file.Path> pathIterator () {
+		return new Iterator<java.nio.file.Path>() {
+			private Iterator<Path> iter = paths.iterator();
+
+			public void remove () {
+				iter.remove();
+			}
+
+			public java.nio.file.Path next () {
+				return iter.next().path();
 			}
 
 			public boolean hasNext () {
@@ -385,7 +422,11 @@ public class Paths implements Iterable<String> {
 		}
 
 		public File file () {
-			return new File(dir, name);
+			return path().toFile();
+		}
+
+		public java.nio.file.Path path () {
+			return java.nio.file.Paths.get(dir, name);
 		}
 
 		public int hashCode () {
@@ -417,29 +458,42 @@ public class Paths implements Iterable<String> {
 	}
 
 	/** Copies one file to another. */
-	static private void copyFile (File in, File out) throws IOException {
-		FileInputStream sourceStream = new FileInputStream(in);
-		FileOutputStream destinationStream = new FileOutputStream(out);
-		FileChannel sourceChannel = sourceStream.getChannel();
-		FileChannel destinationChannel = destinationStream.getChannel();
-		sourceChannel.transferTo(0, sourceChannel.size(), destinationChannel);
-		sourceChannel.close();
-		sourceStream.close();
-		destinationChannel.close();
-		destinationStream.close();
+	static private void copyFile (java.nio.file.Path in, java.nio.file.Path out) throws IOException {
+		Files.copy(in, out, StandardCopyOption.REPLACE_EXISTING);
+//		FileInputStream sourceStream = new FileInputStream(in);
+//		FileOutputStream destinationStream = new FileOutputStream(out);
+//		FileChannel sourceChannel = sourceStream.getChannel();
+//		FileChannel destinationChannel = destinationStream.getChannel();
+//		sourceChannel.transferTo(0, sourceChannel.size(), destinationChannel);
+//		sourceChannel.close();
+//		sourceStream.close();
+//		destinationChannel.close();
+//		destinationStream.close();
 	}
 
 	/** Deletes a directory and all files and directories it contains. */
-	static private boolean deleteDirectory (File file) {
-		if (file.exists()) {
-			File[] files = file.listFiles();
-			for (int i = 0, n = files.length; i < n; i++) {
-				if (files[i].isDirectory())
-					deleteDirectory(files[i]);
-				else
-					files[i].delete();
+	private static boolean deleteDirectory (java.nio.file.Path path) {
+		if (path.toFile().exists()) {
+			try (DirectoryStream<java.nio.file.Path> stream = Files.newDirectoryStream(path)) {
+				for (java.nio.file.Path p : stream) {
+					if (p.toFile().isDirectory()) {
+						deleteDirectory(p);
+					} else {
+						try {
+							Files.deleteIfExists(p);
+						} catch (IOException e) {
+							// Do nothing
+						}
+					}
+				}
+			} catch (IOException e) {
+				// exception
 			}
 		}
-		return file.delete();
+		try {
+			return Files.deleteIfExists(path);
+		} catch (IOException e) {
+			return false;
+		}
 	}
 }

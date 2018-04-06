@@ -1,24 +1,27 @@
 
 package com.esotericsoftware.wildcard;
 
-import java.io.File;
 import java.io.IOException;
+import java.nio.file.DirectoryStream;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.List;
 import java.util.regex.Pattern;
 
 class RegexScanner {
-	private final File rootDir;
+	private final Path rootDir;
 	private final List<Pattern> includePatterns;
 	private final List<String> matches = new ArrayList(128);
 
-	public RegexScanner (File rootDir, List<String> includes, List<String> excludes) {
+	public RegexScanner (Path rootDir, List<String> includes, List<String> excludes) {
 		if (rootDir == null) throw new IllegalArgumentException("rootDir cannot be null.");
-		if (!rootDir.exists()) throw new IllegalArgumentException("Directory does not exist: " + rootDir);
-		if (!rootDir.isDirectory()) throw new IllegalArgumentException("File must be a directory: " + rootDir);
+		if (!rootDir.toFile().exists()) throw new IllegalArgumentException("Directory does not exist: " + rootDir);
+		if (!rootDir.toFile().isDirectory()) throw new IllegalArgumentException("File must be a directory: " + rootDir);
 		try {
-			rootDir = rootDir.getCanonicalFile();
+			rootDir = rootDir.toRealPath();
 		} catch (IOException ex) {
 			throw new RuntimeException("OS error determining canonical path: " + rootDir, ex);
 		}
@@ -44,18 +47,20 @@ class RegexScanner {
 		}
 	}
 
-	private void scanDir (File dir) {
-		for (File file : dir.listFiles()) {
-			for (Pattern include : includePatterns) {
-				int length = rootDir.getPath().length();
-				if (!rootDir.getPath().endsWith(File.separator)) length++; // Lose starting slash.
-				String filePath = file.getPath().substring(length);
-				if (include.matcher(filePath).matches()) {
-					matches.add(filePath);
-					break;
+	private void scanDir (Path dir) {
+		try (DirectoryStream<Path> stream = Files.newDirectoryStream(dir)) {
+			for (Path path : stream) {
+				for (Pattern include : includePatterns) {
+					String filePath = rootDir.relativize(path).toString();
+					if (include.matcher(filePath).matches()) {
+						matches.add(filePath);
+						break;
+					}
 				}
+				if (path.toFile().isDirectory()) scanDir(path);
 			}
-			if (file.isDirectory()) scanDir(file);
+		} catch (IOException e) {
+			// exception
 		}
 	}
 
@@ -63,7 +68,7 @@ class RegexScanner {
 		return matches;
 	}
 
-	public File rootDir () {
+	public Path rootDir () {
 		return rootDir;
 	}
 
@@ -75,7 +80,7 @@ class RegexScanner {
 		List<String> excludes = new ArrayList();
 		// excludes.add("website/**/doc**");
 		long start = System.nanoTime();
-		List<String> files = new RegexScanner(new File("..\\website\\includes"), includes, excludes).matches();
+		List<String> files = new RegexScanner(Paths.get("..\\website\\includes"), includes, excludes).matches();
 		long end = System.nanoTime();
 		System.out.println(files.toString().replaceAll(", ", "\n").replaceAll("[\\[\\]]", ""));
 		System.out.println((end - start) / 1000000f);

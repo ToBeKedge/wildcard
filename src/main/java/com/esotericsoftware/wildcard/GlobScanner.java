@@ -3,20 +3,24 @@ package com.esotericsoftware.wildcard;
 
 import java.io.File;
 import java.io.IOException;
+import java.nio.file.DirectoryStream;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.List;
 
 class GlobScanner {
-	private final File rootDir;
+	private final Path rootDir;
 	private final List<String> matches = new ArrayList(128);
 
-	public GlobScanner (File rootDir, List<String> includes, List<String> excludes, boolean ignoreCase) {
+	public GlobScanner (Path rootDir, List<String> includes, List<String> excludes, boolean ignoreCase) {
 		if (rootDir == null) throw new IllegalArgumentException("rootDir cannot be null.");
-		if (!rootDir.exists()) throw new IllegalArgumentException("Directory does not exist: " + rootDir);
-		if (!rootDir.isDirectory()) throw new IllegalArgumentException("File must be a directory: " + rootDir);
+		if (!rootDir.toFile().exists()) throw new IllegalArgumentException("Directory does not exist: " + rootDir);
+		if (!rootDir.toFile().isDirectory()) throw new IllegalArgumentException("File must be a directory: " + rootDir);
 		try {
-			rootDir = rootDir.getCanonicalFile();
+			rootDir = rootDir.toRealPath();
 		} catch (IOException ex) {
 			throw new RuntimeException("OS error determining canonical path: " + rootDir, ex);
 		}
@@ -84,8 +88,8 @@ class GlobScanner {
 		}
 	}
 
-	private void scanDir (File dir, List<Pattern> includes) {
-		if (!dir.canRead()) return;
+	private void scanDir (Path dir, List<Pattern> includes) {
+		if (!Files.isReadable(dir)) return;
 
 		// See if patterns are specific enough to avoid scanning every file in the directory.
 		boolean scanAll = false;
@@ -108,18 +112,24 @@ class GlobScanner {
 			}
 		} else {
 			// Scan every file.
-			for (String fileName : dir.list()) {
-				// Get all include patterns that match.
-				List<Pattern> matchingIncludes = new ArrayList(includes.size());
-				for (Pattern include : includes)
-					if (include.matches(fileName)) matchingIncludes.add(include);
-				if (matchingIncludes.isEmpty()) continue;
-				process(dir, fileName, matchingIncludes);
+			try (DirectoryStream<Path> stream = Files.newDirectoryStream(dir)) {
+				String fileName;
+				for (Path path : stream) {
+					fileName = path.getFileName().toString();
+					// Get all include patterns that match.
+					List<Pattern> matchingIncludes = new ArrayList(includes.size());
+					for (Pattern include : includes)
+						if (include.matches(fileName)) matchingIncludes.add(include);
+					if (matchingIncludes.isEmpty()) continue;
+					process(dir, fileName, matchingIncludes);
+				}
+			} catch (IOException e) {
+				// exception
 			}
 		}
 	}
 
-	private void process (File dir, String fileName, List<Pattern> matchingIncludes) {
+	private void process (Path dir, String fileName, List<Pattern> matchingIncludes) {
 		// Increment patterns that need to move to the next token.
 		boolean isFinalMatch = false;
 		List<Pattern> incrementedPatterns = new ArrayList();
@@ -132,13 +142,11 @@ class GlobScanner {
 			if (include.wasFinalMatch()) isFinalMatch = true;
 		}
 
-		File file = new File(dir, fileName);
+		Path path = dir.resolve(fileName);
 		if (isFinalMatch) {
-			int length = rootDir.getPath().length();
-			if (!rootDir.getPath().endsWith(File.separator)) length++; // Lose starting slash.
-			matches.add(file.getPath().substring(length));
+			matches.add(rootDir.relativize(path).toString());
 		}
-		if (!matchingIncludes.isEmpty() && file.isDirectory()) scanDir(file, matchingIncludes);
+		if (!matchingIncludes.isEmpty() && path.toFile().isDirectory()) scanDir(path, matchingIncludes);
 
 		// Decrement patterns.
 		for (Pattern include : incrementedPatterns)
@@ -149,7 +157,7 @@ class GlobScanner {
 		return matches;
 	}
 
-	public File rootDir () {
+	public Path rootDir () {
 		return rootDir;
 	}
 
@@ -274,7 +282,7 @@ class GlobScanner {
 		// excludes.add("**/*.php");
 		// excludes.add("website/**/doc**");
 		long start = System.nanoTime();
-		List<String> files = new GlobScanner(new File(".."), includes, excludes, false).matches();
+		List<String> files = new GlobScanner(Paths.get(".."), includes, excludes, false).matches();
 		long end = System.nanoTime();
 		System.out.println(files.toString().replaceAll(", ", "\n").replaceAll("[\\[\\]]", ""));
 		System.out.println((end - start) / 1000000f);
